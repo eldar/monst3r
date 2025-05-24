@@ -224,6 +224,42 @@ def depthmap_to_absolute_camera_coordinates(depthmap, camera_intrinsics, camera_
     return X_world, valid_mask
 
 
+def invert_se3(T):
+    R_ = T[:3, :3].T
+    t = T[:3, 3]
+    t_ = -np.einsum("ij,j->i", R_, t)
+    T_ = np.zeros_like(T)
+    T_[:3, :3] = R_
+    T_[:3, 3] = t_
+    return T_
+
+
+def transform_points_np(
+    T, # [... d d]
+    pts, # [... n c]
+): # [... n 3]
+    """
+    Args:
+        T (torch.Tensor): transformation matrix of shape (d, d)
+        pts (torch.Tensor): Input points of shape (n, c)
+    """
+    orig_shape = pts.shape
+    pts = pts.reshape(-1, 3)
+    if pts.shape[-1] == (T.shape[-1] - 1):
+        pts = np.pad(pts, ((0, 0), (0, 1)), constant_values=1)
+    pts = np.einsum("...ji,...ni->...nj", T, pts)
+    pts = pts[..., :3]
+    pts = pts.reshape(orig_shape)
+    return pts
+
+
+def pointmap_to_depthmap(pts3d, camera_pose, z_far, **kw):
+    T_CW = invert_se3(camera_pose)
+    pts3d_cam = transform_points_np(T_CW, pts3d)
+    depthmap = pts3d_cam[..., -1]
+    return depthmap
+
+
 def colmap_to_opencv_intrinsics(K):
     """
     Modify camera intrinsics to follow a different convention.

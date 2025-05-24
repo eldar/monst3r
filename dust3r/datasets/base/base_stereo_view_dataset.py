@@ -10,7 +10,7 @@ import torch
 
 from dust3r.datasets.base.easy_dataset import EasyDataset
 from dust3r.datasets.utils.transforms import ImgNorm
-from dust3r.utils.geometry import depthmap_to_absolute_camera_coordinates
+from dust3r.utils.geometry import depthmap_to_absolute_camera_coordinates, pointmap_to_depthmap
 import dust3r.datasets.utils.cropping as cropping
 
 
@@ -86,7 +86,7 @@ class BaseStereoViewDataset (EasyDataset):
 
         # check data-types
         for v, view in enumerate(views):
-            assert 'pts3d' not in view, f"pts3d should not be there, they will be computed afterwards based on intrinsics+depthmap for view {view_name(view)}"
+            # assert 'pts3d' not in view, f"pts3d should not be there, they will be computed afterwards based on intrinsics+depthmap for view {view_name(view)}"
             view['idx'] = (idx, ar_idx, v)
 
             # encode the image
@@ -99,11 +99,20 @@ class BaseStereoViewDataset (EasyDataset):
                 view['camera_pose'] = np.full((4, 4), np.nan, dtype=np.float32)
             else:
                 assert np.isfinite(view['camera_pose']).all(), f'NaN in camera pose for view {view_name(view)}'
-            assert 'pts3d' not in view
+            # assert 'pts3d' not in view
             assert 'valid_mask' not in view
-            assert np.isfinite(view['depthmap']).all(), f'NaN in depthmap for view {view_name(view)}'
             view['z_far'] = self.z_far
-            pts3d, valid_mask = depthmap_to_absolute_camera_coordinates(**view)
+            if "pts3d" in view:
+                pts3d = view["pts3d"]
+                valid_mask = np.any(view['pts3d'] != 0, axis=-1)
+                valid_mask = valid_mask & np.isfinite(view['pts3d']).all(axis=-1)
+                # depthmap from pts3d and camera
+                depthmap = pointmap_to_depthmap(**view)
+                view["depthmap"] = depthmap
+            else:
+                # view["depthmap"] [H, W]
+                assert np.isfinite(view['depthmap']).all(), f'NaN in depthmap for view {view_name(view)}'
+                pts3d, valid_mask = depthmap_to_absolute_camera_coordinates(**view)
 
             view['pts3d'] = pts3d
             view['valid_mask'] = valid_mask & np.isfinite(pts3d).all(axis=-1)
@@ -172,15 +181,20 @@ class BaseStereoViewDataset (EasyDataset):
             if rng.integers(2):
                 resolution = resolution[::-1]
 
+        is_depthmap = depthmap.shape[-1]==1 or depthmap.ndim==2
+        # print("depth 1", depthmap.shape)
         # high-quality Lanczos down-scaling
         target_resolution = np.array(resolution)
-        if self.aug_focal:
+        if is_depthmap and self.aug_focal:
             crop_scale = self.aug_focal + (1.0 - self.aug_focal) * np.random.beta(0.5, 0.5) # beta distribution, bi-modal
             image, depthmap, intrinsics = cropping.center_crop_image_depthmap(image, depthmap, intrinsics, crop_scale)
 
         if self.aug_crop > 1:
             target_resolution += rng.integers(0, self.aug_crop)
-        image, depthmap, intrinsics = cropping.rescale_image_depthmap(image, depthmap, intrinsics, target_resolution) # slightly scale the image a bit larger than the target resolution
+        # print("depth after focal", depthmap.shape, resolution)
+        if is_depthmap:
+            image, depthmap, intrinsics = cropping.rescale_image_depthmap(image, depthmap, intrinsics, target_resolution) # slightly scale the image a bit larger than the target resolution
+        # print("depth after rescale", depthmap.shape, target_resolution)
 
         # actual cropping (if necessary) with bilinear interpolation
         intrinsics2 = cropping.camera_matrix_of_crop(intrinsics, image.size, resolution, offset_factor=0.5)

@@ -82,8 +82,12 @@ class BasePCOptimizer (nn.Module):
         self.n_imgs = self._check_edges()
 
         # input data
-        pred1_pts = pred1['pts3d']
-        pred2_pts = pred2['pts3d_in_other_view']
+        if 'pts3d_v0_t0' in pred1:
+            pred1_pts = pred1["pts3d_v0_t0"]
+            pred2_pts = pred2["pts3d_v0_t1"]
+        else:
+            pred1_pts = pred1['pts3d']
+            pred2_pts = pred2['pts3d_in_other_view']
         self.pred_i = NoGradParamDict({ij: pred1_pts[n] for n, ij in enumerate(self.str_edges)})
         self.pred_j = NoGradParamDict({ij: pred2_pts[n] for n, ij in enumerate(self.str_edges)})
         self.imshapes = get_imshapes(self.edges, pred1_pts, pred2_pts)
